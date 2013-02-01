@@ -151,6 +151,61 @@ class DBM(NeuralNet):
       node.SetPhase(pos=True)
     return losses
 
+
+  def Inference(self, steps, layernames, unclamped_layers, output_dir, memory='1G', dataset='test', method='gibbs'):
+    layers_to_infer = [self.GetLayerByName(l) for l in layernames]
+    layers_to_unclamp = [self.GetLayerByName(l) for l in unclamped_layers]
+    
+    numdim_list = [layer.state.shape[0] for layer in layers_to_infer]
+    for l in layers_to_unclamp:
+      l.is_input = False
+      l.is_initialized = True
+
+    if dataset == 'train':
+      datagetter = self.GetTrainBatch
+      if self.train_data_handler is None:
+        return
+      numbatches = self.train_data_handler.num_batches
+      size = numbatches * self.train_data_handler.batchsize
+    elif dataset == 'validation':
+      datagetter = self.GetValidationBatch
+      if self.validation_data_handler is None:
+        return
+      numbatches = self.validation_data_handler.num_batches
+      size = numbatches * self.validation_data_handler.batchsize
+    elif dataset == 'test':
+      datagetter = self.GetTestBatch
+      if self.test_data_handler is None:
+        return
+      numbatches = self.test_data_handler.num_batches
+      size = numbatches * self.test_data_handler.batchsize
+    dw = DataWriter(layernames, output_dir, memory, numdim_list, size)
+
+    gibbs = method == 'gibbs'
+    mf = method == 'mf'
+    
+
+    for batch in range(numbatches):
+      sys.stdout.write('\r%d' % (batch+1))
+      sys.stdout.flush()
+      datagetter()
+      for node in self.node_list:
+        if node.is_input or node.is_initialized:
+          node.GetData()
+          if gibbs:
+            node.sample.assign(node.state)
+        else:
+          node.ResetState(rand=False)
+      
+      self.Infer(steps=steps, method=method)
+      
+      output = [l.state.asarray().T for l in layers_to_infer]
+      dw.Submit(output)
+    sys.stdout.write('\n')
+    dw.Commit()
+    return size
+
+
   def Infer(self, steps=0, method='mf', dumpstate=False):
     """Do Inference, conditioned on the inputs.
 
